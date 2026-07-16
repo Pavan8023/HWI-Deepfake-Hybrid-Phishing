@@ -1,3 +1,214 @@
 {
-  "datasets": {}
+  "datasets": {
+    "awareness/phishing_awareness_dataset.csv": {
+      "dataset_name": "phishing_awareness_dataset.csv",
+      "dataset_category": "awareness",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Main human-centred HWI dataset track.",
+      "limitations": [
+        "Unit of analysis requires verification.",
+        "Target meaning requires verification.",
+        "Observed rows must not be assumed to represent confirmed unique people without documentation."
+      ],
+      "notes": ""
+    },
+    "ai_emails/human-generated/legit.csv": {
+      "dataset_name": "legit.csv",
+      "dataset_category": "ai_emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Human-generated versus LLM-generated email comparison track.",
+      "limitations": [
+        "Rows must be treated as email records or generated messages, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "ai_emails/human-generated/phishing.csv": {
+      "dataset_name": "phishing.csv",
+      "dataset_category": "ai_emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Human-generated versus LLM-generated email comparison track.",
+      "limitations": [
+        "Rows must be treated as email records or generated messages, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "ai_emails/llm-generated/legit.csv": {
+      "dataset_name": "legit.csv",
+      "dataset_category": "ai_emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Human-generated versus LLM-generated email comparison track.",
+      "limitations": [
+        "Rows must be treated as email records or generated messages, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "ai_emails/llm-generated/phishing.csv": {
+      "dataset_name": "phishing.csv",
+      "dataset_category": "ai_emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Human-generated versus LLM-generated email comparison track.",
+      "limitations": [
+        "Rows must be treated as email records or generated messages, not people.",
+        "Target meaning requires verification.",
+        "Initial strict CSV parsing failed because of inconsistent field counts."
+      ],
+      "notes": "File requires manual structural verification before relying on full-row counts."
+    },
+    "emails/CEAS_08.csv": {
+      "dataset_name": "CEAS_08.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/Enron.csv": {
+      "dataset_name": "Enron.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/Ling.csv": {
+      "dataset_name": "Ling.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/Nazario.csv": {
+      "dataset_name": "Nazario.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/Nigerian_Fraud.csv": {
+      "dataset_name": "Nigerian_Fraud.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/phishing_email.csv": {
+      "dataset_name": "phishing_email.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "emails/SpamAssasin.csv": {
+      "dataset_name": "SpamAssasin.csv",
+      "dataset_category": "emails",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large phishing-versus-legitimate email analysis track.",
+      "limitations": [
+        "Rows must be treated as email records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": ""
+    },
+    "phishing_urls/malicious_phish.csv": {
+      "dataset_name": "malicious_phish.csv",
+      "dataset_category": "phishing_urls",
+      "source_platform": "Requires verification",
+      "source_reference": "Requires verification",
+      "unit_of_analysis": "Requires verification",
+      "licence": "Requires verification",
+      "target_column": null,
+      "label_meaning": "Requires verification",
+      "role_in_research": "Large-scale technical threat classification track.",
+      "limitations": [
+        "Rows must be treated as URL records, not people.",
+        "Target meaning requires verification."
+      ],
+      "notes": "Future outputs from this track should remain technical-threat oriented rather than person-level HWI claims."
+    }
+  }
 }

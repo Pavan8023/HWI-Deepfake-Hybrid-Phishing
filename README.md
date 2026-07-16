@@ -3,26 +3,48 @@
 This repository contains the implementation artefact for the MSc dissertation:
 "Deepfake-Enabled Hybrid Phishing Detection Through a Human Weakness Index".
 
-The current development phase focuses on project foundations only:
+## Current Phase
 
-- repository validation
-- safe dataset discovery and loading
-- dataset inventory reporting
-- notebook-based data loading checks
-- foundational automated tests
+The current phase is raw-data integration and inventory validation.
 
-The project uses public secondary datasets only and treats the Human Weakness
-Index as a proxy-based vulnerability estimation framework. URL, webpage, and
-email records must not be treated as direct person-level observations unless a
-dataset explicitly supports that unit of analysis.
+This phase covers:
 
-## Current Scope
+- validating the four approved raw-data categories
+- discovering downloaded datasets safely
+- generating raw-data inventory reports
+- documenting metadata that still requires verification
+- keeping dataset categories as separate research tracks
 
-- No primary participant data
-- No questionnaire or interviews
-- No model training yet
-- No dataset merging without a scientifically valid shared identifier
-- No HWI scoring or validation until dataset meaning is confirmed
+This phase does not include:
+
+- EDA
+- preprocessing
+- feature engineering
+- HWI design or scoring
+- model training
+- SHAP or LIME
+- dashboard development
+
+## Approved Raw Dataset Categories
+
+The active raw-data folders are:
+
+- `data/raw/awareness/`
+- `data/raw/ai_emails/`
+- `data/raw/emails/`
+- `data/raw/phishing_urls/`
+
+The old `webpage` and `breaches` raw categories were removed and are not part
+of the active scope.
+
+## Research Guardrails
+
+- Use secondary public datasets only
+- Treat HWI as a proxy-based vulnerability estimation framework
+- Do not treat URL, email, or generated-message rows as human participants
+- Keep the four dataset categories as separate experimental tracks
+- Do not overwrite files in `data/raw/`
+- Do not claim future work is already completed
 
 ## Repository Layout
 
@@ -30,73 +52,75 @@ dataset explicitly supports that unit of analysis.
 HWI/
 |-- data/
 |   |-- raw/
+|   |   |-- awareness/
+|   |   |-- ai_emails/
+|   |   |-- emails/
+|   |   `-- phishing_urls/
 |   |-- interim/
 |   `-- processed/
 |-- notebooks/
-|-- outputs/
-|-- references/
+|   `-- 01_Data_Loading.ipynb
 |-- src/
-`-- tests/
+|-- outputs/
+|   `-- reports/
+|-- references/
+|-- logs/
+|-- tests/
+|-- dashboard/
+|-- requirements-core.txt
+|-- requirements.txt
+|-- README.md
+`-- .gitignore
 ```
 
 ## Core Modules
 
-- `src/config.py`: central paths, reproducibility constants, supported file
-  types, and provisional HWI settings
-- `src/utils.py`: project-root detection, JSON writing, logging, and small
-  filesystem helpers
-- `src/data_loader.py`: raw dataset discovery, safe loading, metadata-aware
-  summarisation, and inventory report generation
+- `src/config.py`: central configuration, approved raw categories, path constants, and reproducibility settings
+- `src/utils.py`: project-root detection, logging, JSON writing, and small helpers
+- `src/data_loader.py`: category-aware discovery, safe loading, metadata resolution, manifest generation, and dataset inventory reporting
 
-## Dataset Inventory Outputs
+## Raw Data Status
+
+- Raw data is no longer empty
+- The approved categories currently contain 13 supported CSV files
+- Inventory generation reports parse/load failures per file without modifying the raw source data
+
+## Generated Inventory Outputs
 
 Running the inventory workflow creates:
 
 - `outputs/reports/dataset_inventory.csv`
 - `outputs/reports/dataset_inventory.json`
 - `outputs/reports/data_quality_summary.csv`
+- `outputs/reports/raw_file_manifest.csv`
+- `outputs/reports/unsupported_raw_files.csv`
 - `outputs/reports/dataset_summaries/*.json`
 
-Manual metadata for unit-of-analysis and licence notes can be added in
-`references/dataset_metadata.json`.
-
 ## Setup
-
-Use the project virtual environment described in the dissertation brief:
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 python -m pip install -r requirements-core.txt
 ```
 
-If the broader environment is needed later:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
 ## Validation Commands
 
 ```powershell
-python -c "from src.config import PROJECT_ROOT; print(PROJECT_ROOT)"
-python -c "from src.data_loader import load_dataset; print('Import successful')"
 python -m pytest -v
+python -c "from src.config import APPROVED_RAW_DATASET_CATEGORIES; print(APPROVED_RAW_DATASET_CATEGORIES)"
+python -c "from src.data_loader import build_dataset_inventory; print('data_loader import successful')"
 ```
 
 ## Notebook
 
-The first notebook for this phase is:
+`notebooks/01_Data_Loading.ipynb` is the loading and inventory notebook for the
+current phase. It validates the environment, checks the four approved raw
+categories, previews discovered files safely, and regenerates inventory reports.
 
-- `notebooks/01_Data_Loading.ipynb`
+## Current Status Summary
 
-It detects the project root, imports the `src` package, reports environment
-details, discovers supported raw datasets, loads available files, and saves
-inventory outputs. It also warns cleanly when `data/raw/` is empty.
-
-## Research Guardrails
-
-- Do not overwrite files in `data/raw/`
-- Do not invent dataset columns or scientific findings
-- Do not claim user-level behavioural measurement from technical records alone
-- Treat current HWI weights and thresholds as provisional sensitivity-analysis
-  defaults, not validated truth
+- Foundation code exists and remains active
+- Downloaded raw datasets are present in the four approved categories
+- Raw-data inventory integration is in progress
+- EDA and modelling have not started
+- Dataset tracks remain separate

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
 
 from src.config import (
+    APPROVED_RAW_DATASET_CATEGORIES,
     CANDIDATE_TARGET_COLUMN_KEYWORDS,
     CSV_ENCODINGS_TO_TRY,
     DATASET_METADATA_PATH,
@@ -21,11 +24,14 @@ from src.utils import get_logger, timestamp_utc, to_jsonable, write_json
 LOGGER = get_logger(__name__)
 
 INVENTORY_COLUMNS = [
+    "relative_path",
     "dataset_path",
     "file_name",
     "extension",
     "file_size_bytes",
     "dataset_category",
+    "load_status",
+    "load_error",
     "row_count",
     "column_count",
     "column_names",
@@ -42,7 +48,11 @@ INVENTORY_COLUMNS = [
 ]
 
 QUALITY_COLUMNS = [
+    "relative_path",
     "dataset_path",
+    "dataset_category",
+    "load_status",
+    "load_error",
     "row_count",
     "column_count",
     "total_missing_values",
@@ -54,6 +64,29 @@ QUALITY_COLUMNS = [
     "generated_at_utc",
 ]
 
+RAW_FILE_MANIFEST_COLUMNS = [
+    "relative_path",
+    "category",
+    "filename",
+    "extension",
+    "size_bytes",
+    "size_mb",
+    "supported",
+    "last_modified",
+]
+
+
+@dataclass
+class InventoryBuildDiagnostics:
+    """Capture file-discovery and load outcomes for one inventory run."""
+
+    approved_category_status: dict[str, bool]
+    unexpected_categories: list[str] = field(default_factory=list)
+    supported_files: list[str] = field(default_factory=list)
+    unsupported_files: list[str] = field(default_factory=list)
+    successful_files: list[str] = field(default_factory=list)
+    failed_files: dict[str, str] = field(default_factory=dict)
+
 
 class DatasetLoaderError(RuntimeError):
     """Raised when dataset discovery or loading fails in a controlled way."""
@@ -63,6 +96,17 @@ def is_supported_dataset(path: Path | str) -> bool:
     """Return True when the file extension is supported by the loader."""
 
     return Path(path).suffix.lower() in SUPPORTED_DATASET_EXTENSIONS
+
+
+def _relative_to_raw_dir(path: Path, raw_data_dir: Path = RAW_DATA_DIR) -> str:
+    """Return a dataset path relative to the raw data directory when possible."""
+
+    raw_dir = Path(raw_data_dir).resolve()
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(raw_dir).as_posix()
+    except ValueError:
+        return resolved_path.as_posix()
 
 
 def validate_dataset_path(path: Path | str) -> Path:
@@ -82,20 +126,179 @@ def validate_dataset_path(path: Path | str) -> Path:
     return dataset_path
 
 
-def discover_dataset_files(raw_data_dir: Path = RAW_DATA_DIR) -> list[Path]:
-    """Recursively discover supported datasets under the raw data directory."""
+def discover_raw_category_directories(
+    raw_data_dir: Path = RAW_DATA_DIR,
+) -> dict[str, Path]:
+    """Return the direct child directories currently present under data/raw."""
 
     raw_dir = Path(raw_data_dir).resolve()
     if not raw_dir.exists():
-        LOGGER.warning("Raw data directory does not exist: %s", raw_dir)
-        return []
+        return {}
 
-    dataset_paths = [
+    return {
+        child.name: child
+        for child in sorted(raw_dir.iterdir(), key=lambda item: item.name.lower())
+        if child.is_dir()
+    }
+
+
+def validate_approved_raw_categories(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    approved_categories: Iterable[str] = APPROVED_RAW_DATASET_CATEGORIES,
+) -> dict[str, bool]:
+    """Return existence flags for each approved raw category."""
+
+    raw_dir = Path(raw_data_dir).resolve()
+    return {
+        category: (raw_dir / category).exists() and (raw_dir / category).is_dir()
+        for category in approved_categories
+    }
+
+
+def find_unexpected_raw_categories(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    approved_categories: Iterable[str] = APPROVED_RAW_DATASET_CATEGORIES,
+) -> list[Path]:
+    """Find direct child raw-data directories that are not approved categories."""
+
+    category_directories = discover_raw_category_directories(raw_data_dir=raw_data_dir)
+    approved = set(approved_categories)
+    return [
         path
-        for path in raw_dir.rglob("*")
-        if path.is_file() and is_supported_dataset(path)
+        for name, path in category_directories.items()
+        if name not in approved
     ]
+
+
+def _approved_category_paths(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    approved_categories: Iterable[str] = APPROVED_RAW_DATASET_CATEGORIES,
+) -> list[Path]:
+    raw_dir = Path(raw_data_dir).resolve()
+    return [
+        raw_dir / category
+        for category in approved_categories
+        if (raw_dir / category).exists() and (raw_dir / category).is_dir()
+    ]
+
+
+def discover_dataset_files(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    approved_categories: Iterable[str] = APPROVED_RAW_DATASET_CATEGORIES,
+) -> list[Path]:
+    """Recursively discover supported datasets inside approved raw categories only."""
+
+    dataset_paths: list[Path] = []
+    for category_path in _approved_category_paths(
+        raw_data_dir=raw_data_dir,
+        approved_categories=approved_categories,
+    ):
+        dataset_paths.extend(
+            [
+                path
+                for path in category_path.rglob("*")
+                if path.is_file() and is_supported_dataset(path)
+            ]
+        )
+
     return sorted(dataset_paths, key=lambda item: item.as_posix().lower())
+
+
+def discover_unsupported_raw_files(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    approved_categories: Iterable[str] = APPROVED_RAW_DATASET_CATEGORIES,
+) -> list[Path]:
+    """List unsupported files found within approved raw categories."""
+
+    unsupported_paths: list[Path] = []
+    for category_path in _approved_category_paths(
+        raw_data_dir=raw_data_dir,
+        approved_categories=approved_categories,
+    ):
+        unsupported_paths.extend(
+            [
+                path
+                for path in category_path.rglob("*")
+                if path.is_file() and not is_supported_dataset(path)
+            ]
+        )
+
+    return sorted(unsupported_paths, key=lambda item: item.as_posix().lower())
+
+
+def detect_dataset_category(
+    dataset_path: Path,
+    raw_data_dir: Path = RAW_DATA_DIR,
+) -> str:
+    """Infer the top-level raw category from a dataset path."""
+
+    relative_path = _relative_to_raw_dir(dataset_path, raw_data_dir=raw_data_dir)
+    parts = Path(relative_path).parts
+    if parts:
+        return parts[0]
+    return "unclassified"
+
+
+def create_raw_file_manifest(
+    raw_data_dir: Path = RAW_DATA_DIR,
+    *,
+    output_path: Path | None = None,
+) -> pd.DataFrame:
+    """Create a manifest of all files currently present under data/raw."""
+
+    raw_dir = Path(raw_data_dir).resolve()
+    records: list[dict[str, Any]] = []
+
+    if raw_dir.exists():
+        for path in sorted(raw_dir.rglob("*"), key=lambda item: item.as_posix().lower()):
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            records.append(
+                {
+                    "relative_path": _relative_to_raw_dir(path, raw_data_dir=raw_dir),
+                    "category": detect_dataset_category(path, raw_data_dir=raw_dir),
+                    "filename": path.name,
+                    "extension": path.suffix.lower(),
+                    "size_bytes": int(stat.st_size),
+                    "size_mb": round(stat.st_size / (1024 * 1024), 4),
+                    "supported": is_supported_dataset(path),
+                    "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
+
+    manifest_frame = pd.DataFrame(records, columns=RAW_FILE_MANIFEST_COLUMNS)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_frame.to_csv(output_path, index=False, encoding="utf-8")
+    return manifest_frame
+
+
+def _save_unsupported_raw_files_report(
+    unsupported_files: list[Path],
+    raw_data_dir: Path = RAW_DATA_DIR,
+    output_path: Path | None = None,
+) -> pd.DataFrame:
+    records = [
+        {
+            "relative_path": _relative_to_raw_dir(path, raw_data_dir=raw_data_dir),
+            "category": detect_dataset_category(path, raw_data_dir=raw_data_dir),
+            "filename": path.name,
+            "extension": path.suffix.lower(),
+            "size_bytes": int(path.stat().st_size),
+        }
+        for path in unsupported_files
+    ]
+
+    output_frame = pd.DataFrame(
+        records,
+        columns=["relative_path", "category", "filename", "extension", "size_bytes"],
+    )
+    if output_path is None:
+        output_path = REPORTS_DIR / "unsupported_raw_files.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_frame.to_csv(output_path, index=False, encoding="utf-8")
+    return output_frame
 
 
 def _load_csv(
@@ -137,17 +340,23 @@ def _load_csv(
 def _load_excel(
     dataset_path: Path,
     *,
-    sheet_name: int | str | None = 0,
+    sheet_name: int | str = 0,
     **kwargs: Any,
 ) -> pd.DataFrame:
     engine = "openpyxl" if dataset_path.suffix.lower() == ".xlsx" else "xlrd"
     try:
-        return pd.read_excel(
+        excel_result = pd.read_excel(
             dataset_path,
             sheet_name=sheet_name,
             engine=engine,
             **kwargs,
         )
+        if not isinstance(excel_result, pd.DataFrame):
+            raise DatasetLoaderError(
+                "Expected a single-sheet DataFrame when loading Excel data. "
+                "Pass a specific sheet name or index instead of requesting all sheets."
+            )
+        return excel_result
     except ImportError as exc:
         raise DatasetLoaderError(
             f"Missing optional dependency '{engine}' required for {dataset_path.name}."
@@ -211,7 +420,7 @@ def load_dataset(
             **kwargs,
         )
     if suffix in {".xlsx", ".xls"}:
-        return _load_excel(dataset_path, **kwargs)
+        return _load_excel(dataset_path, nrows=nrows, **kwargs)
     if suffix == ".json":
         return _load_json(dataset_path, **kwargs)
     if suffix == ".parquet":
@@ -220,9 +429,42 @@ def load_dataset(
     raise DatasetLoaderError(f"No loader is implemented for extension '{suffix}'.")
 
 
+def load_dataset_preview(
+    path: Path | str,
+    *,
+    preview_rows: int = 5,
+    encoding: str | None = None,
+    low_memory: bool = False,
+) -> pd.DataFrame:
+    """Load a small preview without forcing a full read for CSV and Excel files."""
+
+    dataset_path = validate_dataset_path(path)
+    suffix = dataset_path.suffix.lower()
+
+    if suffix == ".csv":
+        preview = load_dataset(
+            dataset_path,
+            nrows=preview_rows,
+            encoding=encoding,
+            low_memory=low_memory,
+        )
+        if isinstance(preview, pd.DataFrame):
+            return preview
+    elif suffix in {".xlsx", ".xls"}:
+        preview = load_dataset(dataset_path, nrows=preview_rows)
+        if isinstance(preview, pd.DataFrame):
+            return preview
+    else:
+        preview = load_dataset(dataset_path)
+        if isinstance(preview, pd.DataFrame):
+            return preview.head(preview_rows)
+
+    raise DatasetLoaderError(f"Unable to produce a preview for {dataset_path.name}.")
+
+
 def load_dataset_metadata(
     metadata_path: Path = DATASET_METADATA_PATH,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Any]]:
     """Load optional manual dataset metadata for unit-of-analysis and licence notes."""
 
     resolved_path = Path(metadata_path).resolve()
@@ -242,56 +484,32 @@ def load_dataset_metadata(
             "Dataset metadata JSON must contain a top-level 'datasets' object."
         )
 
-    normalized: dict[str, dict[str, str]] = {}
+    normalized: dict[str, dict[str, Any]] = {}
     for key, value in datasets.items():
         if isinstance(value, dict):
-            normalized[str(key)] = {
-                str(field): str(field_value)
-                for field, field_value in value.items()
-                if field_value is not None
-            }
+            normalized[str(key)] = value
     return normalized
 
 
 def resolve_dataset_metadata(
     dataset_path: Path,
-    metadata_map: dict[str, dict[str, str]],
+    metadata_map: dict[str, dict[str, Any]],
     *,
     raw_data_dir: Path = RAW_DATA_DIR,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Resolve metadata using relative path, filename, or stem-based lookup."""
 
-    raw_dir = Path(raw_data_dir).resolve()
-    candidate_keys: list[str] = []
-
-    try:
-        candidate_keys.append(dataset_path.resolve().relative_to(raw_dir).as_posix())
-    except ValueError:
-        pass
-
-    candidate_keys.extend((dataset_path.name, dataset_path.stem))
+    candidate_keys = [
+        _relative_to_raw_dir(dataset_path, raw_data_dir=raw_data_dir),
+        dataset_path.name,
+        dataset_path.stem,
+    ]
 
     for key in candidate_keys:
         if key in metadata_map:
             return metadata_map[key]
 
     return {}
-
-
-def detect_dataset_category(dataset_path: Path, raw_data_dir: Path = RAW_DATA_DIR) -> str:
-    """Infer the dataset category from its location under the raw data directory."""
-
-    raw_dir = Path(raw_data_dir).resolve()
-    try:
-        relative_parts = dataset_path.resolve().relative_to(raw_dir).parts
-    except ValueError:
-        return "unclassified"
-
-    if len(relative_parts) >= 2:
-        return relative_parts[0]
-    if relative_parts:
-        return relative_parts[0]
-    return "unclassified"
 
 
 def detect_candidate_target_columns(columns: Iterable[Any]) -> list[str]:
@@ -311,7 +529,7 @@ def generate_dataset_summary(
     dataset_path: Path | str,
     *,
     raw_data_dir: Path = RAW_DATA_DIR,
-    metadata: dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a summary describing dataset structure and quality characteristics."""
 
@@ -329,11 +547,14 @@ def generate_dataset_summary(
     dtypes = {str(column): str(dtype) for column, dtype in dataframe.dtypes.items()}
 
     summary = {
+        "relative_path": _relative_to_raw_dir(resolved_path, raw_data_dir=raw_data_dir),
         "dataset_path": resolved_path.as_posix(),
         "file_name": resolved_path.name,
         "extension": resolved_path.suffix.lower(),
         "file_size_bytes": int(resolved_path.stat().st_size),
         "dataset_category": detect_dataset_category(resolved_path, raw_data_dir=raw_data_dir),
+        "load_status": "success",
+        "load_error": "",
         "row_count": int(len(dataframe)),
         "column_count": int(dataframe.shape[1]),
         "column_names": column_names,
@@ -352,25 +573,62 @@ def generate_dataset_summary(
     return summary
 
 
+def _failed_inventory_record(
+    dataset_path: Path,
+    error_message: str,
+    *,
+    raw_data_dir: Path = RAW_DATA_DIR,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = metadata or {}
+    return {
+        "relative_path": _relative_to_raw_dir(dataset_path, raw_data_dir=raw_data_dir),
+        "dataset_path": dataset_path.resolve().as_posix(),
+        "file_name": dataset_path.name,
+        "extension": dataset_path.suffix.lower(),
+        "file_size_bytes": int(dataset_path.stat().st_size),
+        "dataset_category": detect_dataset_category(dataset_path, raw_data_dir=raw_data_dir),
+        "load_status": "failed",
+        "load_error": error_message,
+        "row_count": None,
+        "column_count": None,
+        "column_names": [],
+        "dtypes": {},
+        "missing_value_counts": {},
+        "duplicate_row_count": None,
+        "memory_usage_bytes": None,
+        "candidate_target_columns": [],
+        "unique_value_counts": {},
+        "unit_of_analysis_note": metadata.get("unit_of_analysis", ""),
+        "licence_note": metadata.get("licence", ""),
+        "metadata_notes": metadata.get("notes", ""),
+        "generated_at_utc": timestamp_utc(),
+    }
+
+
 def save_dataset_summary(
     summary: dict[str, Any],
     output_dir: Path = DATASET_SUMMARIES_DIR,
 ) -> Path:
     """Save a single dataset summary as JSON."""
 
-    dataset_name = Path(summary["file_name"]).stem
-    output_path = Path(output_dir) / f"{dataset_name}_summary.json"
+    relative_path = Path(summary["relative_path"])
+    output_name = "__".join(relative_path.parts).replace(relative_path.suffix, "")
+    output_path = Path(output_dir) / f"{output_name}_summary.json"
     write_json(summary, output_path)
     return output_path
 
 
 def _inventory_record_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {
+        "relative_path": summary["relative_path"],
         "dataset_path": summary["dataset_path"],
         "file_name": summary["file_name"],
         "extension": summary["extension"],
         "file_size_bytes": summary["file_size_bytes"],
         "dataset_category": summary["dataset_category"],
+        "load_status": summary["load_status"],
+        "load_error": summary["load_error"],
         "row_count": summary["row_count"],
         "column_count": summary["column_count"],
         "column_names": summary["column_names"],
@@ -389,10 +647,14 @@ def _inventory_record_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 def _quality_record_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {
+        "relative_path": summary["relative_path"],
         "dataset_path": summary["dataset_path"],
+        "dataset_category": summary["dataset_category"],
+        "load_status": summary["load_status"],
+        "load_error": summary["load_error"],
         "row_count": summary["row_count"],
         "column_count": summary["column_count"],
-        "total_missing_values": summary["total_missing_values"],
+        "total_missing_values": summary.get("total_missing_values"),
         "duplicate_row_count": summary["duplicate_row_count"],
         "memory_usage_bytes": summary["memory_usage_bytes"],
         "candidate_target_columns": summary["candidate_target_columns"],
@@ -402,9 +664,9 @@ def _quality_record_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _records_to_csv_ready_frame(records: list[dict[str, Any]]) -> pd.DataFrame:
+def _records_to_csv_ready_frame(records: list[dict[str, Any]], columns: list[str]) -> pd.DataFrame:
     if not records:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns)
 
     csv_ready_records: list[dict[str, Any]] = []
     for record in records:
@@ -415,7 +677,7 @@ def _records_to_csv_ready_frame(records: list[dict[str, Any]]) -> pd.DataFrame:
             else:
                 normalized[key] = value
         csv_ready_records.append(normalized)
-    return pd.DataFrame(csv_ready_records)
+    return pd.DataFrame(csv_ready_records, columns=columns)
 
 
 def save_inventory_reports(
@@ -432,24 +694,11 @@ def save_inventory_reports(
     inventory_json_path = resolved_output_dir / "dataset_inventory.json"
     quality_csv_path = resolved_output_dir / "data_quality_summary.csv"
 
-    inventory_frame = _records_to_csv_ready_frame(inventory_records)
-    if inventory_frame.empty:
-        inventory_frame = pd.DataFrame(columns=INVENTORY_COLUMNS)
+    inventory_frame = _records_to_csv_ready_frame(inventory_records, INVENTORY_COLUMNS)
+    quality_frame = _records_to_csv_ready_frame(quality_records, QUALITY_COLUMNS)
 
-    quality_frame = _records_to_csv_ready_frame(quality_records)
-    if quality_frame.empty:
-        quality_frame = pd.DataFrame(columns=QUALITY_COLUMNS)
-
-    inventory_frame.to_csv(
-        inventory_csv_path,
-        index=False,
-        encoding="utf-8",
-    )
-    quality_frame.to_csv(
-        quality_csv_path,
-        index=False,
-        encoding="utf-8",
-    )
+    inventory_frame.to_csv(inventory_csv_path, index=False, encoding="utf-8")
+    quality_frame.to_csv(quality_csv_path, index=False, encoding="utf-8")
     write_json(inventory_records, inventory_json_path)
 
     return {
@@ -466,11 +715,40 @@ def build_dataset_inventory(
     output_dir: Path = REPORTS_DIR,
     save_summaries: bool = True,
     summaries_output_dir: Path | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Discover datasets, summarise them, and save inventory reports."""
+    return_diagnostics: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, InventoryBuildDiagnostics]:
+    """Discover datasets, summarise them, save reports, and continue past per-file errors."""
 
-    dataset_paths = discover_dataset_files(raw_data_dir=raw_data_dir)
+    raw_dir = Path(raw_data_dir).resolve()
     metadata_map = load_dataset_metadata(metadata_path=metadata_path)
+
+    approved_category_status = validate_approved_raw_categories(raw_data_dir=raw_dir)
+    unexpected_categories = [
+        path.name for path in find_unexpected_raw_categories(raw_data_dir=raw_dir)
+    ]
+    if unexpected_categories:
+        LOGGER.warning("Unexpected raw categories found: %s", unexpected_categories)
+
+    supported_dataset_paths = discover_dataset_files(raw_data_dir=raw_dir)
+    unsupported_dataset_paths = discover_unsupported_raw_files(raw_data_dir=raw_dir)
+
+    output_dir_path = Path(output_dir).resolve()
+    manifest_output_path = output_dir_path / "raw_file_manifest.csv"
+    unsupported_output_path = output_dir_path / "unsupported_raw_files.csv"
+
+    create_raw_file_manifest(raw_data_dir=raw_dir, output_path=manifest_output_path)
+    _save_unsupported_raw_files_report(
+        unsupported_dataset_paths,
+        raw_data_dir=raw_dir,
+        output_path=unsupported_output_path,
+    )
+
+    diagnostics = InventoryBuildDiagnostics(
+        approved_category_status=approved_category_status,
+        unexpected_categories=unexpected_categories,
+        supported_files=[_relative_to_raw_dir(path, raw_data_dir=raw_dir) for path in supported_dataset_paths],
+        unsupported_files=[_relative_to_raw_dir(path, raw_data_dir=raw_dir) for path in unsupported_dataset_paths],
+    )
 
     inventory_records: list[dict[str, Any]] = []
     quality_records: list[dict[str, Any]] = []
@@ -478,39 +756,58 @@ def build_dataset_inventory(
     summaries_dir = (
         Path(summaries_output_dir).resolve()
         if summaries_output_dir is not None
-        else Path(output_dir).resolve() / "dataset_summaries"
+        else output_dir_path / "dataset_summaries"
     )
 
-    for dataset_path in dataset_paths:
-        LOGGER.info("Profiling dataset: %s", dataset_path.name)
+    for dataset_path in supported_dataset_paths:
+        relative_path = _relative_to_raw_dir(dataset_path, raw_data_dir=raw_dir)
         metadata = resolve_dataset_metadata(
             dataset_path,
             metadata_map,
-            raw_data_dir=raw_data_dir,
+            raw_data_dir=raw_dir,
         )
-        dataset = load_dataset(dataset_path)
-        if not isinstance(dataset, pd.DataFrame):
-            raise DatasetLoaderError(
-                "Chunked dataset iterators are not supported for inventory generation."
+
+        try:
+            LOGGER.info("Profiling dataset: %s", relative_path)
+            dataset = load_dataset(dataset_path)
+            if not isinstance(dataset, pd.DataFrame):
+                raise DatasetLoaderError(
+                    "Chunked dataset iterators are not supported for inventory generation."
+                )
+
+            summary = generate_dataset_summary(
+                dataset,
+                dataset_path,
+                raw_data_dir=raw_dir,
+                metadata=metadata,
             )
+            inventory_record = _inventory_record_from_summary(summary)
+            quality_record = _quality_record_from_summary(summary)
 
-        summary = generate_dataset_summary(
-            dataset,
-            dataset_path,
-            raw_data_dir=raw_data_dir,
-            metadata=metadata,
-        )
-        inventory_record = _inventory_record_from_summary(summary)
-        quality_record = _quality_record_from_summary(summary)
+            inventory_records.append(inventory_record)
+            quality_records.append(quality_record)
+            diagnostics.successful_files.append(relative_path)
 
-        inventory_records.append(inventory_record)
-        quality_records.append(quality_record)
+            if save_summaries:
+                save_dataset_summary(summary, output_dir=summaries_dir)
+        except Exception as exc:
+            error_message = f"{type(exc).__name__}: {exc}"
+            LOGGER.error("Failed to load dataset %s: %s", relative_path, error_message)
+            failure_record = _failed_inventory_record(
+                dataset_path,
+                error_message,
+                raw_data_dir=raw_dir,
+                metadata=metadata,
+            )
+            inventory_records.append(failure_record)
+            quality_records.append(_quality_record_from_summary(failure_record))
+            diagnostics.failed_files[relative_path] = error_message
 
-        if save_summaries:
-            save_dataset_summary(summary, output_dir=summaries_dir)
-
-    save_inventory_reports(inventory_records, quality_records, output_dir=output_dir)
+    save_inventory_reports(inventory_records, quality_records, output_dir=output_dir_path)
 
     inventory_frame = pd.DataFrame(inventory_records, columns=INVENTORY_COLUMNS)
     quality_frame = pd.DataFrame(quality_records, columns=QUALITY_COLUMNS)
+
+    if return_diagnostics:
+        return inventory_frame, quality_frame, diagnostics
     return inventory_frame, quality_frame

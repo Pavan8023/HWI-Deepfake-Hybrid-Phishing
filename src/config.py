@@ -11,6 +11,17 @@ RAW_DATA_DIR: Final[Path] = DATA_DIR / "raw"
 INTERIM_DATA_DIR: Final[Path] = DATA_DIR / "interim"
 PROCESSED_DATA_DIR: Final[Path] = DATA_DIR / "processed"
 
+APPROVED_RAW_DATASET_CATEGORIES: Final[tuple[str, ...]] = (
+    "awareness",
+    "ai_emails",
+    "emails",
+    "phishing_urls",
+)
+
+RAW_DATASET_CATEGORY_PATHS: Final[dict[str, Path]] = {
+    category: RAW_DATA_DIR / category for category in APPROVED_RAW_DATASET_CATEGORIES
+}
+
 NOTEBOOKS_DIR: Final[Path] = PROJECT_ROOT / "notebooks"
 MODELS_DIR: Final[Path] = PROJECT_ROOT / "models"
 OUTPUTS_DIR: Final[Path] = PROJECT_ROOT / "outputs"
@@ -18,6 +29,8 @@ OUTPUTS_DIR: Final[Path] = PROJECT_ROOT / "outputs"
 FIGURES_DIR: Final[Path] = OUTPUTS_DIR / "figures"
 REPORTS_DIR: Final[Path] = OUTPUTS_DIR / "reports"
 DATASET_SUMMARIES_DIR: Final[Path] = REPORTS_DIR / "dataset_summaries"
+RAW_FILE_MANIFEST_PATH: Final[Path] = REPORTS_DIR / "raw_file_manifest.csv"
+UNSUPPORTED_RAW_FILES_PATH: Final[Path] = REPORTS_DIR / "unsupported_raw_files.csv"
 STATISTICS_DIR: Final[Path] = OUTPUTS_DIR / "statistics"
 PREDICTIONS_DIR: Final[Path] = OUTPUTS_DIR / "predictions"
 SHAP_DIR: Final[Path] = OUTPUTS_DIR / "shap"
