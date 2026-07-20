@@ -124,3 +124,18 @@ categories, previews discovered files safely, and regenerates inventory reports.
 - Raw-data inventory integration is in progress
 - EDA and modelling have not started
 - Dataset tracks remain separate
+
+
+
+# Awareness Dataset: Initial EDA Conclusion
+
+- The dataset contains 5,000 rows and 12 columns.
+- The complete dataset was analysed because its size is below the 50,000-row EDA limit.
+- No loading errors occurred.
+- `clicked_link` is the leading candidate outcome variable.
+- `hover_time_ms` and `session_duration_sec` are behavioural proxy variables.
+- `reported_email` may represent security awareness, but its timing must be confirmed to avoid target leakage.
+- `user_id` should be excluded from modelling.
+- `geo_location` should be excluded initially because it contains precise coordinates and lacks a clear theoretical link to human weakness.
+- The dataset measures interaction behaviour and context more directly than digital literacy, trust or psychological awareness.
+- The final HWI dimensions must therefore be based only on variables genuinely available and scientifically defensible.
