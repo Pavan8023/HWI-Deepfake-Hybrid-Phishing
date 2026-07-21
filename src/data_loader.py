@@ -300,6 +300,186 @@ def _save_unsupported_raw_files_report(
     output_frame.to_csv(output_path, index=False, encoding="utf-8")
     return output_frame
 
+def _load_last_delimiter_label_csv(
+    dataset_path: Path,
+    *,
+    encoding: str,
+    nrows: int | None = None,
+) -> pd.DataFrame:
+    """
+    Load a two-column CSV where the text field contains unescaped commas.
+
+    Expected physical structure:
+
+        text,label
+        complete email text containing commas,1
+
+    The final comma in each physical row separates the label from the text.
+    All preceding content is preserved as the text field.
+
+    This function does not modify the source file.
+    """
+
+    records: list[dict[str, Any]] = []
+
+    try:
+        with dataset_path.open(
+            "r",
+            encoding=encoding,
+            errors="strict",
+        ) as file:
+            header_line = file.readline().strip()
+
+            normalized_header = [
+                value.strip().lower()
+                for value in header_line.split(",")
+            ]
+
+            if normalized_header != ["text", "label"]:
+                raise DatasetLoaderError(
+                    "Fallback parser expected the header "
+                    f"'text,label', but found: {header_line!r}"
+                )
+
+            for line_number, raw_line in enumerate(
+                file,
+                start=2,
+            ):
+                if nrows is not None and len(records) >= nrows:
+                    break
+
+                line = raw_line.rstrip("\r\n")
+
+                if not line.strip():
+                    continue
+
+                if "," not in line:
+                    raise DatasetLoaderError(
+                        f"Line {line_number} does not contain a final "
+                        "label separator."
+                    )
+
+                text_value, label_value = line.rsplit(",", maxsplit=1)
+
+                text_value = text_value.strip()
+                label_value = label_value.strip()
+
+                if not text_value:
+                    raise DatasetLoaderError(
+                        f"Line {line_number} contains empty email text."
+                    )
+
+                if label_value not in {"0", "1"}:
+                    raise DatasetLoaderError(
+                        f"Line {line_number} has an invalid label: "
+                        f"{label_value!r}"
+                    )
+
+                records.append(
+                    {
+                        "text": text_value,
+                        "label": int(label_value),
+                    }
+                )
+
+    except UnicodeDecodeError as exc:
+        raise DatasetLoaderError(
+            f"Could not decode fallback CSV '{dataset_path.name}' "
+            f"using encoding '{encoding}': {exc}"
+        ) from exc
+
+    if not records:
+        raise DatasetLoaderError(
+            f"No valid rows were loaded from '{dataset_path.name}'."
+        )
+
+    return pd.DataFrame.from_records(
+        records,
+        columns=["text", "label"],
+    )
+
+def _looks_like_last_delimiter_label_csv(
+    dataset_path: Path,
+    *,
+    encoding: str,
+    inspection_rows: int = 25,
+) -> bool:
+    """
+    Detect a non-standard two-column email CSV.
+
+    Expected structure:
+
+        text,label
+        email text containing unescaped commas,1
+
+    The function returns True only when:
+
+    - the header is exactly ``text,label``;
+    - inspected rows end in label 0 or 1;
+    - at least one inspected row contains more than one comma.
+
+    The raw file is never changed.
+    """
+
+    if inspection_rows <= 0:
+        raise ValueError(
+            "inspection_rows must be greater than zero."
+        )
+
+    try:
+        with dataset_path.open(
+            "r",
+            encoding=encoding,
+            errors="strict",
+        ) as file:
+            header_line = file.readline().strip()
+
+            normalized_header = [
+                value.strip().lower()
+                for value in header_line.split(",")
+            ]
+
+            if normalized_header != ["text", "label"]:
+                return False
+
+            inspected_rows = 0
+            row_with_unescaped_commas_found = False
+
+            for raw_line in file:
+                line = raw_line.rstrip("\r\n")
+
+                if not line.strip():
+                    continue
+
+                inspected_rows += 1
+
+                if "," not in line:
+                    return False
+
+                text_value, label_value = line.rsplit(
+                    ",",
+                    maxsplit=1,
+                )
+
+                if not text_value.strip():
+                    return False
+
+                if label_value.strip() not in {"0", "1"}:
+                    return False
+
+                if line.count(",") > 1:
+                    row_with_unescaped_commas_found = True
+
+                if inspected_rows >= inspection_rows:
+                    break
+
+            return (
+                inspected_rows > 0
+                and row_with_unescaped_commas_found
+            )
+
+    except UnicodeDecodeError:
+        return False
 
 def _load_csv(
     dataset_path: Path,
@@ -310,10 +490,50 @@ def _load_csv(
     low_memory: bool = False,
     **kwargs: Any,
 ) -> pd.DataFrame | Iterable[pd.DataFrame]:
-    encodings = (encoding,) if encoding else CSV_ENCODINGS_TO_TRY
-    errors: list[str] = []
+    """
+    Load a CSV dataset safely.
+
+    Standard CSV files are loaded using pandas.
+
+    A controlled custom parser is used for a known non-standard format where:
+
+    - the header is ``text,label``;
+    - email text contains unescaped commas;
+    - the final comma separates the binary label.
+
+    Raw files are never modified.
+    """
+
+    encodings = (
+        (encoding,)
+        if encoding
+        else CSV_ENCODINGS_TO_TRY
+    )
+
+    decoding_errors: list[str] = []
+    parser_errors: list[str] = []
+    fallback_errors: list[str] = []
 
     for candidate_encoding in encodings:
+        # Detect the special email format before pandas attempts to
+        # interpret malformed rows silently.
+        if chunksize is None and _looks_like_last_delimiter_label_csv(
+            dataset_path,
+            encoding=candidate_encoding,
+        ):
+            try:
+                return _load_last_delimiter_label_csv(
+                    dataset_path=dataset_path,
+                    encoding=candidate_encoding,
+                    nrows=nrows,
+                )
+
+            except DatasetLoaderError as exc:
+                fallback_errors.append(
+                    f"{candidate_encoding}: {exc}"
+                )
+                continue
+
         try:
             return pd.read_csv(
                 dataset_path,
@@ -323,20 +543,75 @@ def _load_csv(
                 low_memory=low_memory,
                 **kwargs,
             )
+
         except UnicodeDecodeError as exc:
-            errors.append(f"{candidate_encoding}: {exc}")
+            decoding_errors.append(
+                f"{candidate_encoding}: {exc}"
+            )
+            continue
+
+        except pd.errors.ParserError as exc:
+            parser_errors.append(
+                f"{candidate_encoding}: {exc}"
+            )
+
+            if chunksize is not None:
+                raise DatasetLoaderError(
+                    "The malformed two-column CSV fallback does not "
+                    "support chunked loading. Load it without chunksize "
+                    "or create a cleaned copy under data/interim."
+                ) from exc
+
+            try:
+                return _load_last_delimiter_label_csv(
+                    dataset_path=dataset_path,
+                    encoding=candidate_encoding,
+                    nrows=nrows,
+                )
+
+            except DatasetLoaderError as fallback_exc:
+                fallback_errors.append(
+                    f"{candidate_encoding}: {fallback_exc}"
+                )
+                continue
+
         except Exception as exc:
             raise DatasetLoaderError(
-                f"Failed to read CSV dataset '{dataset_path.name}' using "
-                f"encoding '{candidate_encoding}': {exc}"
+                f"Failed to read CSV dataset "
+                f"'{dataset_path.name}' using encoding "
+                f"'{candidate_encoding}': {exc}"
             ) from exc
 
-    raise DatasetLoaderError(
-        "Unable to decode CSV dataset with the configured encodings. "
-        f"Errors: {'; '.join(errors)}"
+    error_parts: list[str] = []
+
+    if decoding_errors:
+        error_parts.append(
+            "Decoding errors: "
+            + "; ".join(decoding_errors)
+        )
+
+    if parser_errors:
+        error_parts.append(
+            "Parser errors: "
+            + "; ".join(parser_errors)
+        )
+
+    if fallback_errors:
+        error_parts.append(
+            "Fallback-parser errors: "
+            + "; ".join(fallback_errors)
+        )
+
+    combined_errors = (
+        " | ".join(error_parts)
+        if error_parts
+        else "No compatible parser or encoding was found."
     )
 
-
+    raise DatasetLoaderError(
+        f"Unable to load CSV dataset "
+        f"'{dataset_path.name}'. {combined_errors}"
+    )
 def _load_excel(
     dataset_path: Path,
     *,

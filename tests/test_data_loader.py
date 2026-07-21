@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
 
 from src.data_loader import (
+    DatasetLoaderError,
+    InventoryBuildDiagnostics,
+    _load_last_delimiter_label_csv,
     build_dataset_inventory,
     create_raw_file_manifest,
     detect_dataset_category,
@@ -51,22 +55,52 @@ def test_load_dataset_reads_csv(tmp_path: Path) -> None:
     assert list(dataframe.columns) == ["label", "value"]
 
 
-def test_generate_dataset_summary_reports_expected_fields(tmp_path: Path) -> None:
+def test_generate_dataset_summary_reports_expected_fields(
+    tmp_path: Path,
+) -> None:
+    """Dataset summaries should report structure, targets and missing values."""
+
     csv_path = tmp_path / "emails.csv"
+
     csv_path.write_text(
-        "label,subject,clicks\nphishing,urgent update,\nlegitimate,newsletter,0\n",
+        (
+            "label,subject,clicks\n"
+            "phishing,urgent update,\n"
+            "legitimate,newsletter,0\n"
+        ),
         encoding="utf-8",
     )
-    dataframe = load_dataset(csv_path)
 
-    summary = generate_dataset_summary(dataframe, csv_path, raw_data_dir=tmp_path)
+    loaded_data = load_dataset(csv_path)
+
+    # load_dataset can theoretically return a DataFrame or chunk iterator.
+    # This test does not request chunks, so it must return a DataFrame.
+    assert isinstance(loaded_data, pd.DataFrame)
+
+    dataframe = loaded_data
+
+    summary = generate_dataset_summary(
+        dataframe=dataframe,
+        dataset_path=csv_path,
+        raw_data_dir=tmp_path,
+    )
 
     assert summary["row_count"] == 2
     assert summary["column_count"] == 3
-    assert "label" in summary["candidate_target_columns"]
-    assert summary["missing_value_counts"]["clicks"] == 1
-    assert summary["unit_of_analysis_note"] == ""
 
+    assert summary["column_names"] == [
+        "label",
+        "subject",
+        "clicks",
+    ]
+
+    assert "label" in summary["candidate_target_columns"]
+
+    assert summary["missing_value_counts"]["clicks"] == 1
+    assert summary["total_missing_values"] == 1
+    assert summary["duplicate_row_count"] == 0
+
+    assert summary["unit_of_analysis_note"] == ""
 
 def test_discover_dataset_files_scans_only_approved_categories_recursively(
     tmp_path: Path,
@@ -219,26 +253,108 @@ def test_build_dataset_inventory_handles_multiple_categories_and_failures(
     reports_dir = tmp_path / "reports"
     metadata_path = tmp_path / "dataset_metadata.json"
 
-    _write_csv(raw_dir / "awareness" / "awareness.csv", "score,label\n1,0\n2,1\n")
-    _write_csv(raw_dir / "emails" / "mail.csv", "subject,label\nx,1\n")
-    _write_csv(raw_dir / "ai_emails" / "bad.csv", "text,label\n\"broken,row\n")
-    metadata_path.write_text(json.dumps({"datasets": {}}), encoding="utf-8")
+    _write_csv(
+        raw_dir / "awareness" / "awareness.csv",
+        "score,label\n1,0\n2,1\n",
+    )
+    _write_csv(
+        raw_dir / "emails" / "mail.csv",
+        "subject,label\nx,1\n",
+    )
+    _write_csv(
+        raw_dir / "ai_emails" / "bad.csv",
+        'text,label\n"broken,row\n',
+    )
 
-    inventory_frame, quality_frame, diagnostics = build_dataset_inventory(
+    metadata_path.write_text(
+        json.dumps({"datasets": {}}),
+        encoding="utf-8",
+    )
+
+    inventory_result = build_dataset_inventory(
         raw_data_dir=raw_dir,
         metadata_path=metadata_path,
         output_dir=reports_dir,
         return_diagnostics=True,
     )
 
+    inventory_frame, quality_frame, diagnostics = cast(
+        tuple[
+            pd.DataFrame,
+            pd.DataFrame,
+            InventoryBuildDiagnostics,
+        ],
+        inventory_result,
+    )
+
     assert len(diagnostics.supported_files) == 3
     assert len(diagnostics.successful_files) == 2
     assert "ai_emails/bad.csv" in diagnostics.failed_files
     assert "webpage" not in diagnostics.approved_category_status
-    assert set(inventory_frame["load_status"]) == {"success", "failed"}
-    assert set(quality_frame["load_status"]) == {"success", "failed"}
-    assert (reports_dir / "dataset_inventory.csv").exists()
-    assert (reports_dir / "dataset_inventory.json").exists()
-    assert (reports_dir / "data_quality_summary.csv").exists()
-    assert (reports_dir / "raw_file_manifest.csv").exists()
-    assert (reports_dir / "unsupported_raw_files.csv").exists()
+
+    assert set(inventory_frame["load_status"]) == {
+        "success",
+        "failed",
+    }
+    assert set(quality_frame["load_status"]) == {
+        "success",
+        "failed",
+    }
+
+    assert (
+        reports_dir / "dataset_inventory.csv"
+    ).exists()
+    assert (
+        reports_dir / "dataset_inventory.json"
+    ).exists()
+    assert (
+        reports_dir / "data_quality_summary.csv"
+    ).exists()
+    assert (
+        reports_dir / "raw_file_manifest.csv"
+    ).exists()
+    assert (
+        reports_dir / "unsupported_raw_files.csv"
+    ).exists()
+
+
+def test_load_dataset_uses_fallback_for_unescaped_commas(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "malformed_email.csv"
+
+    csv_path.write_text(
+        (
+            "text,label\n"
+            "Dear User, your account is at risk, verify now,1\n"
+            "Dear Customer, urgent action is required,1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    dataframe = load_dataset(csv_path)
+
+    assert isinstance(dataframe, pd.DataFrame)
+    assert dataframe.shape == (2, 2)
+    assert dataframe.columns.tolist() == ["text", "label"]
+    assert dataframe["label"].tolist() == [1, 1]
+
+
+def test_load_last_delimiter_label_csv_rejects_invalid_label(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "invalid_label.csv"
+
+    csv_path.write_text(
+        (
+            "text,label\n"
+            "Email text with commas, but invalid label,unknown\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatasetLoaderError):
+        _load_last_delimiter_label_csv(
+            dataset_path=csv_path,
+            encoding="utf-8",
+        )
