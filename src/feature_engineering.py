@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+import hashlib
+
 
 class FeatureEngineeringError(RuntimeError):
     """Raised when feature engineering cannot be completed safely."""
@@ -661,6 +663,88 @@ def add_experimental_labels(
 
     return result
 
+def build_template_group_id(
+    text: str,
+) -> str:
+    """
+    Build a deterministic template identifier
+    from normalised email text.
+    """
+
+    value = str(text).lower()
+
+    value = re.sub(
+        r"https?://\S+|www\.\S+",
+        "<url>",
+        value,
+    )
+
+    value = re.sub(
+        r"\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b",
+        "<email>",
+        value,
+    )
+
+    value = re.sub(
+        r"\d+",
+        "<number>",
+        value,
+    )
+
+    value = re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
+
+    return hashlib.sha256(
+        value.encode("utf-8")
+    ).hexdigest()
+
+def build_template_group_ids(
+    text: pd.Series,
+) -> pd.Series:
+    """
+    Build deterministic template identifiers from normalised email text.
+
+    These identifiers are used only for GroupShuffleSplit during
+    model evaluation. They are NOT model features.
+    """
+
+    def normalise(value: object) -> str:
+
+        value = str(value).lower()
+
+        value = re.sub(
+            r"https?://\S+|www\.\S+",
+            "<url>",
+            value,
+        )
+
+        value = re.sub(
+            r"\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b",
+            "<email>",
+            value,
+        )
+
+        value = re.sub(
+            r"\d+",
+            "<number>",
+            value,
+        )
+
+        value = re.sub(
+            r"\s+",
+            " ",
+            value,
+        ).strip()
+
+        return hashlib.sha256(
+            value.encode("utf-8")
+        ).hexdigest()
+
+    return text.map(normalise)
+
 
 def build_ai_email_feature_dataset(
     human_legitimate: pd.DataFrame,
@@ -669,19 +753,30 @@ def build_ai_email_feature_dataset(
     llm_phishing: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Build one harmonised feature table for the four AI-email experiment groups.
-
-    Human email text is created from subject and body.
-    LLM email text is read from the text column.
-
-    The four source datasets remain identifiable through explicit labels.
+    Build one harmonised feature dataset for the four AI-email groups.
     """
+
+    # -------------------------------------------------
+    # Human legitimate
+    # -------------------------------------------------
 
     human_legitimate_features = engineer_email_features(
         human_legitimate,
         subject_column="subject",
         body_column="body",
     )
+
+    human_legitimate_features["combined_text"] = [
+        combine_subject_and_body(
+            subject,
+            body,
+        )
+        for subject, body in zip(
+            human_legitimate["subject"],
+            human_legitimate["body"],
+            strict=True,
+        )
+    ]
 
     human_legitimate_features = add_experimental_labels(
         human_legitimate_features,
@@ -694,11 +789,27 @@ def build_ai_email_feature_dataset(
         ),
     )
 
+    # -------------------------------------------------
+    # Human phishing
+    # -------------------------------------------------
+
     human_phishing_features = engineer_email_features(
         human_phishing,
         subject_column="subject",
         body_column="body",
     )
+
+    human_phishing_features["combined_text"] = [
+        combine_subject_and_body(
+            subject,
+            body,
+        )
+        for subject, body in zip(
+            human_phishing["subject"],
+            human_phishing["body"],
+            strict=True,
+        )
+    ]
 
     human_phishing_features = add_experimental_labels(
         human_phishing_features,
@@ -711,9 +822,19 @@ def build_ai_email_feature_dataset(
         ),
     )
 
+    # -------------------------------------------------
+    # LLM legitimate
+    # -------------------------------------------------
+
     llm_legitimate_features = engineer_email_features(
         llm_legitimate,
         text_column="text",
+    )
+
+    llm_legitimate_features["combined_text"] = (
+        llm_legitimate["text"]
+        .fillna("")
+        .astype(str)
     )
 
     llm_legitimate_features = add_experimental_labels(
@@ -727,9 +848,19 @@ def build_ai_email_feature_dataset(
         ),
     )
 
+    # -------------------------------------------------
+    # LLM phishing
+    # -------------------------------------------------
+
     llm_phishing_features = engineer_email_features(
         llm_phishing,
         text_column="text",
+    )
+
+    llm_phishing_features["combined_text"] = (
+        llm_phishing["text"]
+        .fillna("")
+        .astype(str)
     )
 
     llm_phishing_features = add_experimental_labels(
@@ -759,8 +890,17 @@ def build_ai_email_feature_dataset(
         + combined["email_class"]
     )
 
-    return combined
+    combined["template_group_id"] = (
+        build_template_group_ids(
+            combined["combined_text"]
+        )
+    )
 
+    combined = combined.drop(
+        columns=["combined_text"]
+    )
+
+    return combined
 
 def validate_feature_frame(
     feature_frame: pd.DataFrame,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+import re
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -10,6 +11,20 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from src.feature_engineering import (
+    AUTHORITY_KEYWORDS,
+    CALL_TO_ACTION_KEYWORDS,
+    CREDENTIAL_KEYWORDS,
+    FEAR_KEYWORDS,
+    FINANCIAL_KEYWORDS,
+    TRUST_KEYWORDS,
+    URGENCY_KEYWORDS,
+    calculate_uppercase_ratio,
+    count_keyword_occurrences,
+    normalise_text,
+    tokenise_words,
+)
 
 from src.config import RANDOM_STATE, TEST_SIZE
 
@@ -260,20 +275,123 @@ def clean_text_column(
 ) -> pd.Series:
     """Normalize a text or categorical column without imputing it."""
 
-    return (
-        series
-        .astype("string")
+    cleaned = (
+        series.astype("string")
         .str.strip()
-        .replace(
-            {
-                "": pd.NA,
-                "nan": pd.NA,
-                "none": pd.NA,
-                "null": pd.NA,
-            }
-        )
     )
 
+    cleaned = cleaned.mask(cleaned == "")
+    cleaned = cleaned.mask(cleaned.str.lower() == "nan")
+    cleaned = cleaned.mask(cleaned.str.lower() == "none")
+    cleaned = cleaned.mask(cleaned.str.lower() == "null")
+
+    return cleaned
+
+
+FREE_EMAIL_DOMAINS = {
+    "gmail.com",
+    "yahoo.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+    "aol.com",
+    "protonmail.com",
+}
+
+
+def engineer_subject_features(
+    series: pd.Series,
+) -> pd.DataFrame:
+    """Create compact interpretable features from email subjects."""
+
+    records: list[dict[str, float | int]] = []
+
+    for value in series:
+        text = normalise_text(value)
+        words = tokenise_words(text)
+
+        records.append(
+            {
+                "subject_character_count": len(text),
+                "subject_word_count": len(words),
+                "subject_exclamation_count": text.count("!"),
+                "subject_question_count": text.count("?"),
+                "subject_uppercase_ratio": round(
+                    calculate_uppercase_ratio(text),
+                    6,
+                ),
+                "subject_urgency_count": count_keyword_occurrences(
+                    text,
+                    URGENCY_KEYWORDS,
+                ),
+                "subject_authority_count": count_keyword_occurrences(
+                    text,
+                    AUTHORITY_KEYWORDS,
+                ),
+                "subject_fear_count": count_keyword_occurrences(
+                    text,
+                    FEAR_KEYWORDS,
+                ),
+                "subject_financial_count": count_keyword_occurrences(
+                    text,
+                    FINANCIAL_KEYWORDS,
+                ),
+                "subject_credential_count": count_keyword_occurrences(
+                    text,
+                    CREDENTIAL_KEYWORDS,
+                ),
+                "subject_trust_count": count_keyword_occurrences(
+                    text,
+                    TRUST_KEYWORDS,
+                ),
+                "subject_call_to_action_count": count_keyword_occurrences(
+                    text,
+                    CALL_TO_ACTION_KEYWORDS,
+                ),
+            }
+        )
+
+    return pd.DataFrame(
+        records,
+        index=series.index,
+    )
+
+
+def engineer_domain_features(
+    series: pd.Series,
+) -> pd.DataFrame:
+    """Create compact structural features from sender domains."""
+
+    records: list[dict[str, float | int]] = []
+
+    for value in series:
+        domain = normalise_text(value).strip().lower()
+
+        dot_count = domain.count(".")
+
+        records.append(
+            {
+                "domain_length": len(domain),
+                "domain_digit_count": sum(
+                    character.isdigit()
+                    for character in domain
+                ),
+                "domain_hyphen_count": domain.count("-"),
+                "domain_dot_count": dot_count,
+                "domain_subdomain_count": max(
+                    0,
+                    dot_count - 1,
+                ),
+                "domain_free_email_indicator": int(
+                    domain in FREE_EMAIL_DOMAINS
+                ),
+            }
+        )
+
+    return pd.DataFrame(
+        records,
+        index=series.index,
+    )
 
 def prepare_awareness_dataframe(
     dataframe: pd.DataFrame,
@@ -284,17 +402,11 @@ def prepare_awareness_dataframe(
     """
     Perform deterministic awareness-data preparation.
 
-    This stage:
-    - validates raw columns;
-    - encodes the target;
-    - excludes identifiers and sensitive columns;
-    - excludes reported_email unless explicitly approved;
-    - derives timestamp features;
-    - converts numeric columns safely;
-    - retains email subject and sender domain for later transformation.
+    Raw subjects and sender domains are transformed into compact,
+    interpretable numeric features rather than one-hot encoded.
 
-    It does not learn medians, means, scaling values or categories.
-    Those operations are fitted only on the training partition.
+    Learning operations such as imputation, scaling and categorical
+    encoding are fitted later using only the training partition.
     """
 
     validate_awareness_columns(
@@ -309,10 +421,24 @@ def prepare_awareness_dataframe(
         column_name=schema.target_column,
     )
 
+    datetime_features = derive_datetime_features(
+        dataframe[schema.datetime_column],
+        column_name=schema.datetime_column,
+    )
+
+    subject_features = engineer_subject_features(
+        dataframe["email_subject"]
+    )
+
+    domain_features = engineer_domain_features(
+        dataframe["sender_email_domain"]
+    )
+
     columns_to_drop = [
         schema.target_column,
         *schema.identifier_columns,
         *schema.excluded_sensitive_columns,
+        *schema.text_columns,
         schema.datetime_column,
     ]
 
@@ -326,15 +452,12 @@ def prepare_awareness_dataframe(
         errors="raise",
     )
 
-    datetime_features = derive_datetime_features(
-        dataframe[schema.datetime_column],
-        column_name=schema.datetime_column,
-    )
-
     prepared = pd.concat(
         [
             prepared,
             datetime_features,
+            subject_features,
+            domain_features,
         ],
         axis=1,
     )
@@ -345,7 +468,9 @@ def prepare_awareness_dataframe(
             errors="coerce",
         )
 
-        negative_mask = prepared[column] < 0
+        negative_mask = (
+            prepared[column] < 0
+        )
 
         if negative_mask.any():
             prepared.loc[
@@ -357,18 +482,12 @@ def prepare_awareness_dataframe(
         column
         for column in (
             *schema.categorical_columns,
-            *schema.text_columns,
             *schema.possible_leakage_columns,
+            "received_day_of_week",
+            "received_time_period",
         )
         if column in prepared.columns
     ]
-
-    columns_to_clean.extend(
-        [
-            "received_day_of_week",
-            "received_time_period",
-        ]
-    )
 
     for column in columns_to_clean:
         prepared[column] = clean_text_column(
@@ -377,12 +496,16 @@ def prepare_awareness_dataframe(
 
     if schema.target_column in prepared.columns:
         raise PreprocessingError(
-            "Target leakage detected: target column remains in predictors."
+            "Target leakage detected: target column remains "
+            "in predictors."
         )
 
     forbidden_columns = {
         *schema.identifier_columns,
         *schema.excluded_sensitive_columns,
+        *schema.text_columns,
+        schema.datetime_column,
+        schema.target_column,
     }
 
     if not include_reported_email:
@@ -398,7 +521,7 @@ def prepare_awareness_dataframe(
 
     if leaked_columns:
         raise PreprocessingError(
-            "Excluded columns remain in predictors: "
+            "Excluded raw columns remain in predictors: "
             + ", ".join(leaked_columns)
         )
 
@@ -406,7 +529,6 @@ def prepare_awareness_dataframe(
         prepared.reset_index(drop=True),
         target.reset_index(drop=True),
     )
-
 
 def stratified_awareness_split(
     features: pd.DataFrame,

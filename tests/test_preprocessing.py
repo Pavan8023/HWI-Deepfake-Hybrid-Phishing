@@ -276,14 +276,23 @@ def test_identify_awareness_feature_types() -> None:
     )
 
     assert "hover_time_ms" in numeric_columns
-    assert (
-        "session_duration_sec"
-        in numeric_columns
-    )
+    assert "session_duration_sec" in numeric_columns
+
+    assert "subject_word_count" in numeric_columns
+    assert "subject_character_count" in numeric_columns
+    assert "subject_urgency_count" in numeric_columns
+    assert "domain_length" in numeric_columns
+
     assert "device_type" in categorical_columns
-    assert "email_subject" in categorical_columns
+    assert "browser_used" in categorical_columns
+    assert "email_language" in categorical_columns
 
+    assert "email_subject" not in features.columns
+    assert "sender_email_domain" not in features.columns
+    assert "email_subject" not in categorical_columns
+    assert "sender_email_domain" not in categorical_columns
 
+    
 def test_build_awareness_preprocessor() -> None:
     preprocessor = build_awareness_preprocessor(
         numeric_columns=[
